@@ -7,8 +7,12 @@ from aws_cdk import (
     aws_rds as rds,
     aws_elasticache as elasticache,
     aws_opensearchservice as es,
+    aws_ecs as ecs,
+    aws_ecs_patterns as ecs_patterns,
+    aws_secretsmanager as asm,
 )
 
+import json
 from constructs import Construct
 
 class MastodonCdkStack(Stack):
@@ -93,20 +97,13 @@ class MastodonCdkStack(Stack):
             ec2.Port.tcp(6379)
         )
 
-        # TRASH - Please take out. -elk 3/25/2023
-        # mastodon_cache_sg = elasticache.CfnSecurityGroup(
-        #     self,
-        #     "mastodon-cache-sg",
-        #     description="mastodon-cache-sg"
-        # )
-
-        mastodon_priv_subnet_ids = [ps.subnet_id for ps in vpc.private_subnets]
+        mastodon_iso_subnet_ids = [ps.subnet_id for ps in vpc.isolated_subnets]
 
         mastodon_cache_subnet_group = elasticache.CfnSubnetGroup(
             self,
             "mastodon-cache-subnet-group",
             description="mastodon-cache-subnet-group",
-            subnet_ids=mastodon_priv_subnet_ids
+            subnet_ids=mastodon_iso_subnet_ids
         )
 
         mastodon_redis = elasticache.CfnCacheCluster(
@@ -119,8 +116,76 @@ class MastodonCdkStack(Stack):
             port=6379,
             auto_minor_version_upgrade=True,
             az_mode="single-az",
-            # cache_subnet_group_name=mastodon_cache_subnet_group.cache_subnet_group_name, # This does not appear to work. FIX THIS. -elk 3/25/2023
-            cache_subnet_group_name="mastodoncdkstack-mastodoncachesubnetgroup-5zr9eb4bjukv",
+            cache_subnet_group_name=mastodon_cache_subnet_group.ref,
             vpc_security_group_ids=[mastodon_redis_sg.security_group_id],
         )
 
+        # ECS Cluster Configuration
+        mastodon_cluster = ecs.Cluster(
+            self,
+            "mastodon-ecs-cluster",
+            vpc=vpc,
+            cluster_name="mastodon-ecs-cluster",
+            enable_fargate_capacity_providers=True,
+            container_insights=True,
+        )
+
+        mastodon_admin_secret = asm.Secret(
+            self, 
+            "mastodon-admin-secret",
+            generate_secret_string=asm.SecretStringGenerator(
+                secret_string_template=json.dumps({"username": "madmin"}),
+                generate_string_key="password",
+                include_space=False,
+                require_each_included_type=True
+            )
+        )
+
+        mastodon_mode_secret = asm.Secret(
+            self, 
+            "mastodon-mode-secret",
+            generate_secret_string=asm.SecretStringGenerator(
+                secret_string_template=json.dumps({"mastodon_mode": "web"}),
+                generate_string_key="noneya",
+                include_space=False,
+                require_each_included_type=True
+            )
+        )
+
+        mastodon_priv_subnet_ids = [ps.subnet_id for ps in vpc.private_subnets]
+
+        mastodon_web_container = ecs_patterns.ApplicationLoadBalancedFargateService(
+            self, 
+            "mastodon-web-container",
+            cluster=mastodon_cluster,
+            assign_public_ip=False,
+            certificate=mastodon_cert,
+            desired_count=1,
+            cpu=512,
+            public_load_balancer=True,
+            memory_limit_mib=1024,
+            load_balancer_name="mastodon-lb-web",
+            task_image_options=ecs_patterns.ApplicationLoadBalancedTaskImageOptions(
+                image=ecs.ContainerImage.from_registry("docker.io/bitnami/mastodon:latest"),
+                container_port=8080,
+                enable_logging=True,
+                secrets={
+                    "MASTODON_ADMIN_USERNAME": ecs.Secret.from_secrets_manager(mastodon_admin_secret, "username"),
+                    "MASTODON_ADMIN_PASSWORD": ecs.Secret.from_secrets_manager(mastodon_admin_secret, "password"),
+                    "MASTODON_MODE": ecs.Secret.from_secrets_manager(mastodon_mode_secret, "mastodon_mode")
+                },
+            ),
+        )
+
+        # scalable_target = load_balanced_fargate_service.service.auto_scale_task_count(
+        #     min_capacity=1,
+        #     max_capacity=20
+        # )
+
+        # scalable_target.scale_on_cpu_utilization("CpuScaling",
+        #     target_utilization_percent=50
+        # )
+
+        # scalable_target.scale_on_memory_utilization("MemoryScaling",
+        #     target_utilization_percent=50
+        # )
