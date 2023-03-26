@@ -6,6 +6,7 @@ from aws_cdk import (
     aws_route53 as r53,
     aws_rds as rds,
     aws_elasticache as elasticache,
+    aws_opensearchservice as es,
 )
 
 from constructs import Construct
@@ -92,47 +93,34 @@ class MastodonCdkStack(Stack):
             ec2.Port.tcp(6379)
         )
 
+        # TRASH - Please take out. -elk 3/25/2023
+        # mastodon_cache_sg = elasticache.CfnSecurityGroup(
+        #     self,
+        #     "mastodon-cache-sg",
+        #     description="mastodon-cache-sg"
+        # )
+
+        mastodon_priv_subnet_ids = [ps.subnet_id for ps in vpc.private_subnets]
+
+        mastodon_cache_subnet_group = elasticache.CfnSubnetGroup(
+            self,
+            "mastodon-cache-subnet-group",
+            description="mastodon-cache-subnet-group",
+            subnet_ids=mastodon_priv_subnet_ids
+        )
+
         mastodon_redis = elasticache.CfnCacheCluster(
-            self, 
+            self,
             "mastodon-redis-cluster",
-            cache_node_type="cache.t4g.micro",
             engine="redis",
+            cache_node_type="cache.t4g.micro",
             num_cache_nodes=1,
+            engine_version="7.0",
+            port=6379,
             auto_minor_version_upgrade=True,
             az_mode="single-az",
-            # cache_parameter_group_name="cacheParameterGroupName",
-            cache_security_group_names=[mastodon_redis_sg.security_group_id],
-            # cache_subnet_group_name="cacheSubnetGroupName",
-            cluster_name="mastodon-redis-cluster",
-            # engine_version="engineVersion",
-            # ip_discovery="ipDiscovery",
-            # log_delivery_configurations=[elasticache.CfnCacheCluster.LogDeliveryConfigurationRequestProperty(
-            #     destination_details=elasticache.CfnCacheCluster.DestinationDetailsProperty(
-            #         cloud_watch_logs_details=elasticache.CfnCacheCluster.CloudWatchLogsDestinationDetailsProperty(
-            #             log_group="logGroup"
-            #         ),
-            #         kinesis_firehose_details=elasticache.CfnCacheCluster.KinesisFirehoseDestinationDetailsProperty(
-            #             delivery_stream="deliveryStream"
-            #         )
-            #     ),
-            #     destination_type="destinationType",
-            #     log_format="logFormat",
-            #     log_type="logType"
-            # )],
-            # network_type="networkType",
-            # notification_topic_arn="notificationTopicArn",
-            port=6379,
-            # preferred_availability_zone="preferredAvailabilityZone",
-            # preferred_availability_zones=["preferredAvailabilityZones"],
-            # preferred_maintenance_window="preferredMaintenanceWindow",
-            # snapshot_arns=["snapshotArns"],
-            # snapshot_name="snapshotName",
-            # snapshot_retention_limit=123,
-            # snapshot_window="snapshotWindow",
-            # tags=[CfnTag(
-            #     key="key",
-            #     value="value"
-            # )],
-            transit_encryption_enabled=True,
-            # vpc_security_group_ids=[mastodon_redis_sg.security_group_id]
+            # cache_subnet_group_name=mastodon_cache_subnet_group.cache_subnet_group_name, # This does not appear to work. FIX THIS. -elk 3/25/2023
+            cache_subnet_group_name="mastodoncdkstack-mastodoncachesubnetgroup-5zr9eb4bjukv",
+            vpc_security_group_ids=[mastodon_redis_sg.security_group_id],
         )
+
