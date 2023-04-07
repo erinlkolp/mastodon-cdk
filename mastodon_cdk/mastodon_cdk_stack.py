@@ -51,13 +51,28 @@ class MastodonCdkStack(Stack):
             enable_dns_support=True
         )
 
+        #Secret for Aurora Postgres
+        mastodon_db_secret = asm.Secret(
+            self, 
+            "mastodon-db-secret",
+            generate_secret_string=asm.SecretStringGenerator(
+                secret_string_template=json.dumps({"username": "madmin"}),
+                generate_string_key="password",
+                include_space=False,
+                require_each_included_type=True,
+                exclude_characters="/@\"",
+                exclude_punctuation=True,
+            )
+        )
+
         database = rds.DatabaseCluster(
             self, 
             "mastodon-database",
+            default_database_name="bitnami_mastodon",
             engine=rds.DatabaseClusterEngine.aurora_postgres(
                 version=rds.AuroraPostgresEngineVersion.VER_14_6
             ),
-            credentials=rds.Credentials.from_generated_secret("mastodonadmin"),
+            credentials=rds.Credentials.from_secret(secret=mastodon_db_secret),
             instance_props=rds.InstanceProps(
                 instance_type=ec2.InstanceType.of(
                     ec2.InstanceClass.BURSTABLE4_GRAVITON, 
@@ -67,6 +82,7 @@ class MastodonCdkStack(Stack):
                     subnet_type=ec2.SubnetType.PRIVATE_ISOLATED
                 ),
                 vpc=vpc,
+                security_groups=mastodon_iso_subnet_ids,
             )
         )
 
@@ -141,17 +157,6 @@ class MastodonCdkStack(Stack):
             )
         )
 
-        mastodon_mode_secret = asm.Secret(
-            self, 
-            "mastodon-mode-secret",
-            generate_secret_string=asm.SecretStringGenerator(
-                secret_string_template=json.dumps({"mastodon_mode": "web"}),
-                generate_string_key="noneya",
-                include_space=False,
-                require_each_included_type=True
-            )
-        )
-
         mastodon_priv_subnet_ids = [ps.subnet_id for ps in vpc.private_subnets]
 
         mastodon_web_container = ecs_patterns.ApplicationLoadBalancedFargateService(
@@ -165,27 +170,25 @@ class MastodonCdkStack(Stack):
             public_load_balancer=True,
             memory_limit_mib=1024,
             load_balancer_name="mastodon-lb-web",
+            listener_port=443,
             task_image_options=ecs_patterns.ApplicationLoadBalancedTaskImageOptions(
                 image=ecs.ContainerImage.from_registry("docker.io/bitnami/mastodon:latest"),
-                container_port=8080,
+                container_port=3000,
                 enable_logging=True,
                 secrets={
                     "MASTODON_ADMIN_USERNAME": ecs.Secret.from_secrets_manager(mastodon_admin_secret, "username"),
                     "MASTODON_ADMIN_PASSWORD": ecs.Secret.from_secrets_manager(mastodon_admin_secret, "password"),
-                    "MASTODON_MODE": ecs.Secret.from_secrets_manager(mastodon_mode_secret, "mastodon_mode")
+                    "MASTODON_DATABASE_PASSWORD": ecs.Secret.from_secrets_manager(mastodon_db_secret, "password")
+                },
+                environment={
+                    "ALLOW_EMPTY_PASSWORD": "yes",
+                    "MASTODON_MODE": "web",
+                    "MASTODON_DATABASE_HOST": database.cluster_endpoint.hostname,
+                    "MASTODON_DATABASE_USER": "madmin",
+                    "MASTODON_REDIS_HOST": mastodon_redis.attr_configuration_endpoint_address
                 },
             ),
+            task_subnets=ec2.SubnetSelection(
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+            ),
         )
-
-        # scalable_target = load_balanced_fargate_service.service.auto_scale_task_count(
-        #     min_capacity=1,
-        #     max_capacity=20
-        # )
-
-        # scalable_target.scale_on_cpu_utilization("CpuScaling",
-        #     target_utilization_percent=50
-        # )
-
-        # scalable_target.scale_on_memory_utilization("MemoryScaling",
-        #     target_utilization_percent=50
-        # )
