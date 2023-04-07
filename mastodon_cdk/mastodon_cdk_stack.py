@@ -65,6 +65,19 @@ class MastodonCdkStack(Stack):
             )
         )
 
+        mastodon_db_sg = ec2.SecurityGroup(
+            self,
+            "mastodon-db-sg",
+            vpc=vpc,
+            security_group_name="mastodon-db-sg",
+            allow_all_outbound=True,
+        )
+
+        mastodon_db_sg.add_ingress_rule(
+            ec2.Peer.any_ipv4(),
+            ec2.Port.tcp(5432)
+        )
+
         database = rds.DatabaseCluster(
             self, 
             "mastodon-database",
@@ -82,7 +95,7 @@ class MastodonCdkStack(Stack):
                     subnet_type=ec2.SubnetType.PRIVATE_ISOLATED
                 ),
                 vpc=vpc,
-                security_groups=mastodon_iso_subnet_ids,
+                security_groups=[mastodon_db_sg],
             )
         )
 
@@ -180,13 +193,13 @@ class MastodonCdkStack(Stack):
                     "MASTODON_ADMIN_PASSWORD": ecs.Secret.from_secrets_manager(mastodon_admin_secret, "password"),
                     "MASTODON_DATABASE_PASSWORD": ecs.Secret.from_secrets_manager(mastodon_db_secret, "password")
                 },
-                environment={
-                    "ALLOW_EMPTY_PASSWORD": "yes",
-                    "MASTODON_MODE": "web",
-                    "MASTODON_DATABASE_HOST": database.cluster_endpoint.hostname,
-                    "MASTODON_DATABASE_USER": "madmin",
-                    "MASTODON_REDIS_HOST": mastodon_redis.attr_configuration_endpoint_address
-                },
+                # environment={
+                #     "ALLOW_EMPTY_PASSWORD": "yes",
+                #     "MASTODON_MODE": "web",
+                #     "MASTODON_DATABASE_HOST": database.cluster_endpoint.hostname,
+                #     "MASTODON_DATABASE_USER": "madmin",
+                #     "MASTODON_REDIS_HOST": mastodon_redis.attr_configuration_endpoint_address
+                # },
             ),
             task_subnets=ec2.SubnetSelection(
                 subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
