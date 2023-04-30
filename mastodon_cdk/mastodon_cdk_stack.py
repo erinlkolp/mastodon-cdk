@@ -1,3 +1,5 @@
+import os
+
 from aws_cdk import (
     Duration,
     Stack,
@@ -102,7 +104,7 @@ class MastodonCdkStack(Stack):
         mastodon_zone = r53.HostedZone.from_hosted_zone_id(
             self, 
             "mastodon-preexisting-zone", 
-            hosted_zone_id="Z08788751CWM32KSLWAVK"
+            hosted_zone_id=os.getenv('R53_HOSTED_ZONE')
         )
 
         mastodon_cert = acm.Certificate(
@@ -138,7 +140,7 @@ class MastodonCdkStack(Stack):
         mastodon_redis = elasticache.CfnCacheCluster(
             self,
             "mastodon-redis-cluster",
-            engine="redis",
+            engine="redis", # "redis" or "memcached"
             cache_node_type="cache.t4g.micro",
             num_cache_nodes=1,
             engine_version="7.0",
@@ -193,13 +195,13 @@ class MastodonCdkStack(Stack):
                     "MASTODON_ADMIN_PASSWORD": ecs.Secret.from_secrets_manager(mastodon_admin_secret, "password"),
                     "MASTODON_DATABASE_PASSWORD": ecs.Secret.from_secrets_manager(mastodon_db_secret, "password")
                 },
-                # environment={
-                #     "ALLOW_EMPTY_PASSWORD": "yes",
-                #     "MASTODON_MODE": "web",
-                #     "MASTODON_DATABASE_HOST": database.cluster_endpoint.hostname,
-                #     "MASTODON_DATABASE_USER": "madmin",
-                #     "MASTODON_REDIS_HOST": mastodon_redis.attr_configuration_endpoint_address
-                # },
+                environment={
+                    "ALLOW_EMPTY_PASSWORD": "yes",
+                    "MASTODON_MODE": "web",
+                    "MASTODON_DATABASE_HOST": str(database.cluster_endpoint.hostname),
+                    "MASTODON_DATABASE_USER": "madmin",
+                    "MASTODON_REDIS_HOST": str(mastodon_redis.attr_redis_endpoint_address)
+                },
             ),
             task_subnets=ec2.SubnetSelection(
                 subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
