@@ -93,7 +93,7 @@ class MastodonCdkStack(Stack):
             ),
             vpc=vpc,
             vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PRIVATE_ISOLATED
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
             ),
             allocated_storage=20,
             auto_minor_version_upgrade=True,
@@ -132,7 +132,7 @@ class MastodonCdkStack(Stack):
             ec2.Port.tcp(6379)
         )
 
-        mastodon_iso_subnet_ids = [ps.subnet_id for ps in vpc.isolated_subnets]
+        mastodon_iso_subnet_ids = [ps.subnet_id for ps in vpc.private_subnets]
 
         mastodon_cache_subnet_group = elasticache.CfnSubnetGroup(
             self,
@@ -186,17 +186,7 @@ class MastodonCdkStack(Stack):
 
         mastodon_web_sg.add_ingress_rule(
             ec2.Peer.any_ipv4(),
-            ec2.Port.tcp(8080)
-        )
-
-        mastodon_web_sg.add_ingress_rule(
-            ec2.Peer.any_ipv4(),
             ec2.Port.tcp(3000)
-        )
-
-        mastodon_web_sg.add_ingress_rule(
-            ec2.Peer.any_ipv4(),
-            ec2.Port.tcp(80)
         )
 
         mastodon_priv_subnet_ids = [ps.subnet_id for ps in vpc.private_subnets]
