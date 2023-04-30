@@ -53,7 +53,6 @@ class MastodonCdkStack(Stack):
             enable_dns_support=True
         )
 
-        #Secret for Aurora Postgres
         mastodon_db_secret = asm.Secret(
             self, 
             "mastodon-db-secret",
@@ -80,26 +79,31 @@ class MastodonCdkStack(Stack):
             ec2.Port.tcp(5432)
         )
 
-        database = rds.DatabaseCluster(
+        database = rds.DatabaseInstance(
             self, 
             "mastodon-database",
-            default_database_name="bitnami_mastodon",
-            engine=rds.DatabaseClusterEngine.aurora_postgres(
-                version=rds.AuroraPostgresEngineVersion.VER_14_6
+            database_name="bitnami_mastodon",
+            multi_az=False,
+            engine=rds.DatabaseInstanceEngine.postgres(
+                version=rds.PostgresEngineVersion.VER_14_7
             ),
+            instance_type=ec2.InstanceType.of(
+                ec2.InstanceClass.BURSTABLE4_GRAVITON, 
+                ec2.InstanceSize.SMALL
+            ),
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(
+                subnet_type=ec2.SubnetType.PRIVATE_ISOLATED
+            ),
+            allocated_storage=20,
+            auto_minor_version_upgrade=True,
+            storage_type=rds.StorageType.GP3,
+            security_groups=[mastodon_db_sg],
             credentials=rds.Credentials.from_secret(secret=mastodon_db_secret),
-            instance_props=rds.InstanceProps(
-                instance_type=ec2.InstanceType.of(
-                    ec2.InstanceClass.BURSTABLE4_GRAVITON, 
-                    ec2.InstanceSize.MEDIUM
-                ),
-                vpc_subnets=ec2.SubnetSelection(
-                    subnet_type=ec2.SubnetType.PRIVATE_ISOLATED
-                ),
-                vpc=vpc,
-                security_groups=[mastodon_db_sg],
-            )
+            storage_encrypted=True,
         )
+
+        database.connections.allow_default_port_from_any_ipv4()
 
         mastodon_zone = r53.HostedZone.from_hosted_zone_id(
             self, 
@@ -172,6 +176,29 @@ class MastodonCdkStack(Stack):
             )
         )
 
+        mastodon_web_sg = ec2.SecurityGroup(
+            self,
+            "mastodon-web-sg",
+            vpc=vpc,
+            security_group_name="mastodon-web-sg",
+            allow_all_outbound=True,
+        )
+
+        mastodon_web_sg.add_ingress_rule(
+            ec2.Peer.any_ipv4(),
+            ec2.Port.tcp(8080)
+        )
+
+        mastodon_web_sg.add_ingress_rule(
+            ec2.Peer.any_ipv4(),
+            ec2.Port.tcp(3000)
+        )
+
+        mastodon_web_sg.add_ingress_rule(
+            ec2.Peer.any_ipv4(),
+            ec2.Port.tcp(80)
+        )
+
         mastodon_priv_subnet_ids = [ps.subnet_id for ps in vpc.private_subnets]
 
         mastodon_web_container = ecs_patterns.ApplicationLoadBalancedFargateService(
@@ -198,12 +225,13 @@ class MastodonCdkStack(Stack):
                 environment={
                     "ALLOW_EMPTY_PASSWORD": "yes",
                     "MASTODON_MODE": "web",
-                    "MASTODON_DATABASE_HOST": str(database.cluster_endpoint.hostname),
-                    "MASTODON_DATABASE_USER": "madmin",
+                    "MASTODON_DATABASE_HOST": str(database.db_instance_endpoint_address),
+                    "MASTODON_DATABASE_USER": str(mastodon_db_secret.secret_value_from_json("username")),
                     "MASTODON_REDIS_HOST": str(mastodon_redis.attr_redis_endpoint_address)
                 },
             ),
             task_subnets=ec2.SubnetSelection(
                 subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
             ),
+            security_groups=[mastodon_web_sg]
         )
